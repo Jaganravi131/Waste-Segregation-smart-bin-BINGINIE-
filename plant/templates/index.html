@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>BIN-GENIE · Smart Waste OS</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&family=Syne:wght@600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/css/style.css" />
+  <link rel="icon" href="/static/img/mark.svg" type="image/svg+xml" />
+</head>
+<body>
+  <div class="app">
+    <aside class="rail">
+      <div class="mark" title="BIN-GENIE">
+        <svg viewBox="0 0 48 48" width="36" height="36" aria-hidden="true">
+          <rect x="4" y="10" width="40" height="30" rx="4" fill="none" stroke="currentColor" stroke-width="2.4"/>
+          <path d="M10 10 V7 h28 v3" fill="none" stroke="currentColor" stroke-width="2.4"/>
+          <circle cx="24" cy="24" r="6" fill="none" stroke="currentColor" stroke-width="2"/>
+          <path d="M18 34 h12" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/>
+        </svg>
+      </div>
+      <nav>
+        <button data-view="facility" class="on" title="Facility">
+          <span class="ico">⌂</span><span>Plant</span>
+        </button>
+        <button data-view="classify" title="Classify">
+          <span class="ico">▣</span><span>Sort</span>
+        </button>
+        <button data-view="analytics" title="Analytics">
+          <span class="ico">▦</span><span>Log</span>
+        </button>
+        <button data-view="hardware" title="Hardware">
+          <span class="ico">⚡</span><span>Bay</span>
+        </button>
+        <button data-view="proof" title="Proof">
+          <span class="ico">✓</span><span>Proof</span>
+        </button>
+      </nav>
+      <div class="rail-foot">
+        <span class="dot live"></span>
+        <small>OS 2.0</small>
+      </div>
+    </aside>
+
+    <div class="stage">
+      <header class="top">
+        <div>
+          <p class="kicker">SMART WASTE SEGREGATION</p>
+          <h1>BIN-GENIE</h1>
+        </div>
+        <div class="top-meta">
+          <div class="pill" id="hwPill"><span class="dot"></span> SIMULATED HW</div>
+          <div class="pill dim" id="clock">--:--:-- IST</div>
+        </div>
+      </header>
+
+      <section id="view-facility" class="view on">
+        <div class="facility-grid">
+          <div class="plant">
+            <div class="plant-head">
+              <h2>Four-bay plant</h2>
+              <p>Rotating disc + flap. Vision proposes, sensors veto, actuator commits.</p>
+            </div>
+            <div class="disc-wrap" id="discWrap">
+              <svg class="disc-svg" viewBox="0 0 420 420" id="discSvg">
+                <defs>
+                  <radialGradient id="gfloor" cx="50%" cy="50%" r="50%">
+                    <stop offset="0%" stop-color="#163225"/>
+                    <stop offset="100%" stop-color="#0b1611"/>
+                  </radialGradient>
+                </defs>
+                <circle cx="210" cy="210" r="200" fill="url(#gfloor)" stroke="#1e3a2c" stroke-width="2"/>
+                <g id="baysDraw"></g>
+                <g id="discRotor" style="transform-origin:210px 210px">
+                  <circle cx="210" cy="210" r="78" fill="#0e1a14" stroke="#c6f25a" stroke-width="2"/>
+                  <circle cx="210" cy="210" r="10" fill="#c6f25a"/>
+                  <path d="M210 210 L210 142" stroke="#c6f25a" stroke-width="4" stroke-linecap="round"/>
+                  <path id="flapArm" d="M186 132 Q210 118 234 132" fill="none" stroke="#3ee0c5" stroke-width="5" stroke-linecap="round"/>
+                </g>
+                <text x="210" y="216" text-anchor="middle" fill="#7f9a88" font-size="9" font-family="IBM Plex Mono">DISC</text>
+              </svg>
+              <div class="flying" id="flyingItem" hidden></div>
+            </div>
+            <div class="bay-row" id="bayRow"></div>
+          </div>
+
+          <aside class="side">
+            <div class="panel">
+              <h3>Sensor fusion</h3>
+              <div class="gauges">
+                <div class="gauge" data-k="ir">
+                  <div class="g-lab">IR TRAY</div>
+                  <div class="g-val" id="gIr">CLEAR</div>
+                </div>
+                <div class="gauge" data-k="moist">
+                  <div class="g-lab">MOISTURE</div>
+                  <div class="g-bar"><i id="gMoistBar"></i></div>
+                  <div class="g-val" id="gMoist">0%</div>
+                </div>
+                <div class="gauge" data-k="metal">
+                  <div class="g-lab">INDUCTIVE</div>
+                  <div class="g-val" id="gMetal">NO METAL</div>
+                </div>
+              </div>
+              <p class="hint">Toggle sensors on the Bay tab to force a veto (wet paper → residual).</p>
+            </div>
+            <div class="panel">
+              <h3>Last ticket</h3>
+              <pre class="ticket" id="ticket">Awaiting first sort.</pre>
+            </div>
+            <div class="panel">
+              <h3>Live ledger</h3>
+              <ul class="ledger" id="ledger"></ul>
+            </div>
+          </aside>
+        </div>
+      </section>
+
+      <section id="view-classify" class="view">
+        <div class="classify-grid">
+          <div class="panel drop-panel">
+            <h3>Drop an item on the tray</h3>
+            <div class="tabs">
+              <button class="tab on" data-tab="upload">Upload</button>
+              <button class="tab" data-tab="cam">Webcam</button>
+            </div>
+            <div id="tab-upload" class="tabbody on">
+              <label class="drop" id="drop">
+                <input type="file" id="file" accept="image/*" hidden />
+                <strong>Drop a photo</strong>
+                <span>or click to browse — bottle, can, paper, peel</span>
+              </label>
+              <div class="preview-row">
+                <img id="preview" alt="" hidden />
+              </div>
+            </div>
+            <div id="tab-cam" class="tabbody">
+              <div class="cam-box">
+                <video id="cam" autoplay playsinline muted></video>
+                <div class="crosshair"></div>
+              </div>
+              <div class="row">
+                <button class="btn" id="btnCam">Open camera</button>
+                <button class="btn primary" id="btnSnap">Capture &amp; sort</button>
+              </div>
+            </div>
+            <p class="hint">No GPU required. Gallery items are the labeled calibration set. Arbitrary photos go through MobileNetV2 → waste map, then the color-texture forest.</p>
+          </div>
+
+          <div class="panel">
+            <h3>Calibration gallery</h3>
+            <p class="hint">Click any item. It runs the full chain: vision → IR/moisture/metal → fused bay → disc.</p>
+            <div class="gallery" id="gallery"></div>
+            <div class="row">
+              <button class="btn primary" id="btnProofLite">Run 10-item proof pass</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="view-analytics" class="view">
+        <div class="stats-row" id="statsRow"></div>
+        <div class="charts">
+          <div class="panel">
+            <h3>Bay mix (window)</h3>
+            <canvas id="chartBin" height="220"></canvas>
+          </div>
+          <div class="panel">
+            <h3>Daily throughput</h3>
+            <canvas id="chartDay" height="220"></canvas>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="row spread">
+            <h3>Detection log</h3>
+            <div class="row">
+              <a class="btn" href="/api/export.csv" download="bingenie_log.csv">Export CSV</a>
+              <button class="btn danger" id="btnReset">Reset facility</button>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>#</th><th>When</th><th>Src</th><th>Vision</th><th>Sensors</th><th>Bay</th><th>ms</th>
+                </tr>
+              </thead>
+              <tbody id="tbody"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section id="view-hardware" class="view">
+        <div class="hw-grid">
+          <div class="panel">
+            <h3>Bridge</h3>
+            <p class="hint">Simulator is the default so you can demo without a board. The serial verbs are identical to <code>firmware/bin_genie_esp32.ino</code>.</p>
+            <div class="row">
+              <input id="port" placeholder="sim  or  /dev/ttyUSB0  or  COM3" />
+              <button class="btn primary" id="btnConnect">Connect</button>
+              <button class="btn" id="btnPing">PING</button>
+            </div>
+            <p class="mono" id="hwState">mode=simulated  port=sim://bin-genie</p>
+            <h3 class="mt">Sensor overrides — fusion demo</h3>
+            <p class="hint">Force a wet tray or a metal hit, then sort a paper sample. Fusion should veto into RS-04.</p>
+            <div class="row wrap">
+              <label class="chk"><input type="checkbox" id="ovIr" checked /> IR present</label>
+              <label class="chk">Moisture
+                <input type="range" id="ovMoist" min="0" max="100" value="-1" />
+                <span id="ovMoistLab">auto</span>
+              </label>
+              <label class="chk"><input type="checkbox" id="ovMetal" /> Metal coil</label>
+              <button class="btn" id="btnOvApply">Apply</button>
+              <button class="btn" id="btnOvClear">Clear</button>
+            </div>
+            <p class="mt"><a class="btn" href="/firmware/bin_genie_esp32.ino" download>Download ESP32 firmware</a>
+               <a class="btn" href="/static/protocol.html" target="_blank" rel="noopener">Protocol</a></p>
+          </div>
+          <div class="panel">
+            <h3>TX / RX</h3>
+            <pre class="txrx" id="txrx">Waiting for traffic.</pre>
+          </div>
+          <div class="panel span2">
+            <h3>Wiring</h3>
+            <div class="wire" id="wiring"></div>
+          </div>
+        </div>
+      </section>
+
+      <section id="view-proof" class="view">
+        <div class="panel">
+          <h3>Proof run</h3>
+          <p>Ten labeled items, one after another. Each row is a real SQLite write plus a simulated (or serial) <code>SORT</code> command. Screen-record this page — it is the viva evidence.</p>
+          <div class="row">
+            <button class="btn primary" id="btnProof">Start proof run</button>
+            <a class="btn" href="/api/proof/report" target="_blank" rel="noopener">Open proof report</a>
+            <a class="btn" href="/static/video/bingenie_simulation.mp4" download>Download simulation video</a>
+          </div>
+          <p class="hint">Evaluators asked for simulation — this 60s clip is the plant running with no physical bin. Captions are burned in so it works muted.</p>
+          <video class="simvid" controls playsinline src="/static/video/bingenie_simulation.mp4"></video>
+          <ol class="proof-list" id="proofList"></ol>
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <div class="toast" id="toast" hidden></div>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <script src="/static/js/app.js"></script>
+</body>
+</html>

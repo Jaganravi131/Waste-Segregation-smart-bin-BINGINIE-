@@ -1,0 +1,12 @@
+fastapi
+uvicorn
+python-multipart
+onnxruntime
+opencv-python
+numpy
+pillow
+scikit-learn
+pyserial
+jinja2
+python-dotenv
+aiofiles

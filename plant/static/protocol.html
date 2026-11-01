@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>BIN-GENIE protocol</title>
+  <style>
+    body { font-family: "IBM Plex Mono", ui-monospace, monospace; background:#08110d; color:#e7f3ea; margin:40px; line-height:1.5; }
+    h1 { font-family: Syne, sans-serif; color:#c6f25a; }
+    code, pre { background:#101c16; padding:12px; display:block; border-radius:8px; }
+    a { color:#3ee0c5; }
+  </style>
+</head>
+<body>
+  <h1>Serial protocol</h1>
+  <p>115200 8N1. Newline-terminated ASCII. Same verbs in the simulator and <a href="/firmware/bin_genie_esp32.ino">ESP32 firmware</a>.</p>
+  <h2>Host → device</h2>
+  <pre>PING
+STATUS
+SORT plastic_metal
+SORT paper
+SORT glass
+SORT residual
+RESET</pre>
+  <h2>Device → host</h2>
+  <pre>PONG firmware=1.0.0 mode=live
+SENSORS ir=1 moist=0.12 metal=0
+SORT_OK bin=paper t_ms=1180 disc=90 flap=18
+SORT_ERR reason=jam</pre>
+  <p>Disc angles: PM-01 0° · PA-02 90° · GL-03 180° · RS-04 270°. Flap 18°.</p>
+</body>
+</html>

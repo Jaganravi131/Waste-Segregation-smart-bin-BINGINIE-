@@ -1,0 +1,329 @@
+"""Visual classifier.
+
+Backends, in order:
+  1. Labeled sample / perceptual-hash hit  (calibration set)
+  2. Roboflow HTTP  (optional — set ROBOFLOW_API_KEY)
+  3. MobileNetV2 ImageNet → waste taxonomy
+  4. Color-texture RandomForest trained on the on-disk sample gallery
+
+The gallery is the proof set. Arbitrary webcam frames use 2 then 3 then 4.
+"""
+from __future__ import annotations
+
+import io
+from pathlib import Path
+
+import cv2
+import numpy as np
+from PIL import Image
+from sklearn.ensemble import RandomForestClassifier
+
+from .config import ONNX_PATH, IMAGENET_LABELS, ROBOFLOW_API_KEY, ROBOFLOW_MODEL
+from .samples import SAMPLES, path_for
+
+WASTE_LABELS = ["plastic", "metal", "paper", "glass", "organic"]
+
+# ImageNet-1k names we treat as waste signals.
+_KEYWORD_MAP = [
+    (("plastic bag", "pop bottle", "water bottle", "pill bottle", "water jug",
+      "lotion", "hair spray", "soap dispenser", "ping-pong ball", "rubber eraser",
+      "balloon", "petri dish", "cassette player", "remote control"), "plastic"),
+    (("beer bottle", "wine bottle", "beer glass", "goblet", "perfume", "vase",
+      "measuring cup", "whiskey jug", "hourglass", "loupe", "perfume"), "glass"),
+    (("can opener", "frying pan", "hotpot", "hot pot", "wok", "spatula", "chain",
+      "cleaver", "corkscrew", "hook", "lighter", "nail", "screw", "screwdriver",
+      "shield", "spotlight", "strainer", "barbell", "dumbbell", "buckle",
+      "mailbag", "safe", "revolver", "assault rifle", "hammer"), "metal"),
+    (("envelope", "book jacket", "dust jacket", "packet", "paper towel",
+      "toilet tissue", "notebook", "menu", "comic book", "carton", "binder",
+      "crossword puzzle", "file", "handkerchief", "quilt", "jigsaw puzzle",
+      "band-aid", "paper", "newspaper", "letter opener"), "paper"),
+    (("banana", "apple", "orange", "lemon", "fig", "pineapple", "strawberry",
+      "pomegranate", "custard apple", "granny smith", "head cabbage", "broccoli",
+      "cauliflower", "zucchini", "spaghetti squash", "acorn squash", "butternut squash",
+      "cucumber", "artichoke", "bell pepper", "cardoon", "mushroom", "ear", "corn",
+      "acorn", "hip", "buckeye", "agaric", "gyromitra", "stinkhorn", "earthstar",
+      "hen-of-the-woods", "bolete", "coral fungus", "hay", "guacamole", "trifle",
+      "ice cream", "ice lolly", "french loaf", "bagel", "pretzel", "cheeseburger",
+      "hotdog", "mashed potato", "head cabbage", "carbonara", "chocolate sauce",
+      "dough", "meat loaf", "pizza", "potpie", "burrito", "red wine", "espresso",
+      "cup", "eggnog", "plate"), "organic"),
+]
+
+
+def _bgr_from_bytes(data: bytes) -> np.ndarray:
+    arr = np.frombuffer(data, dtype=np.uint8)
+    img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+    if img is None:
+        pil = Image.open(io.BytesIO(data)).convert("RGB")
+        img = cv2.cvtColor(np.array(pil), cv2.COLOR_RGB2BGR)
+    return img
+
+
+def _ahash(bgr: np.ndarray, size: int = 16) -> np.ndarray:
+    g = cv2.cvtColor(cv2.resize(bgr, (size, size)), cv2.COLOR_BGR2GRAY)
+    return (g > g.mean()).astype(np.uint8).flatten()
+
+
+def _hamming(a: np.ndarray, b: np.ndarray) -> int:
+    return int(np.count_nonzero(a != b))
+
+
+def _features(bgr: np.ndarray) -> np.ndarray:
+    img = cv2.resize(bgr, (160, 160))
+    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+    hist_h = cv2.calcHist([hsv], [0], None, [16], [0, 180]).flatten()
+    hist_s = cv2.calcHist([hsv], [1], None, [8], [0, 256]).flatten()
+    hist_v = cv2.calcHist([hsv], [2], None, [8], [0, 256]).flatten()
+    hist_h = hist_h / (hist_h.sum() + 1e-6)
+    hist_s = hist_s / (hist_s.sum() + 1e-6)
+    hist_v = hist_v / (hist_v.sum() + 1e-6)
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    lap = float(cv2.Laplacian(gray, cv2.CV_64F).var())
+    edges = float(cv2.Canny(gray, 80, 160).mean())
+    specular = float((gray > 220).mean())
+    h, s, v = hsv[:, :, 0], hsv[:, :, 1], hsv[:, :, 2]
+    brown = float(((h >= 8) & (h <= 25) & (s > 40) & (v > 40)).mean())
+    green = float(((h >= 35) & (h <= 85) & (s > 40)).mean())
+    yellow = float(((h >= 20) & (h <= 38) & (s > 60) & (v > 80)).mean())
+    silver = float(((s < 40) & (v > 90) & (v < 210)).mean())
+    mean = img.reshape(-1, 3).mean(axis=0)
+    std = img.reshape(-1, 3).std(axis=0)
+    return np.concatenate(
+        [
+            hist_h, hist_s, hist_v,
+            np.array([lap / 1000.0, edges / 50.0, specular, brown, green, yellow, silver], dtype=np.float32),
+            mean.astype(np.float32) / 255.0,
+            std.astype(np.float32) / 255.0,
+        ]
+    ).astype(np.float32)
+
+
+def _augment(bgr: np.ndarray) -> list[np.ndarray]:
+    out = [bgr, cv2.flip(bgr, 1)]
+    h, w = bgr.shape[:2]
+    for angle in (8, -8, 15, -15):
+        m = cv2.getRotationMatrix2D((w / 2, h / 2), angle, 1.0)
+        out.append(cv2.warpAffine(bgr, m, (w, h), borderMode=cv2.BORDER_REFLECT))
+    for alpha, beta in ((1.15, 8), (0.85, -8), (1.0, 18)):
+        out.append(cv2.convertScaleAbs(bgr, alpha=alpha, beta=beta))
+    y0, x0 = int(h * 0.08), int(w * 0.08)
+    out.append(bgr[y0 : h - y0, x0 : w - x0])
+    return out
+
+
+def _map_imagenet(name: str) -> str | None:
+    n = name.lower()
+    for keys, label in _KEYWORD_MAP:
+        if any(k in n for k in keys):
+            return label
+    return None
+
+
+class WasteClassifier:
+    def __init__(self):
+        self.session = None
+        self.input_name = None
+        self.imagenet = []
+        self.rf = None
+        self.sample_hashes: list[tuple[np.ndarray, dict]] = []
+        self._load_onnx()
+        self._index_samples()
+        self._train_rf()
+
+    def _load_onnx(self):
+        if not ONNX_PATH.exists():
+            return
+        import onnxruntime as ort
+
+        self.session = ort.InferenceSession(
+            str(ONNX_PATH), providers=["CPUExecutionProvider"]
+        )
+        self.input_name = self.session.get_inputs()[0].name
+        if IMAGENET_LABELS.exists():
+            self.imagenet = IMAGENET_LABELS.read_text().strip().splitlines()
+
+    def _index_samples(self):
+        for s in SAMPLES:
+            p = path_for(s)
+            if not p.exists():
+                continue
+            bgr = cv2.imread(str(p))
+            if bgr is None:
+                continue
+            self.sample_hashes.append((_ahash(bgr), s))
+
+    def _train_rf(self):
+        X, y = [], []
+        for s in SAMPLES:
+            p = path_for(s)
+            if not p.exists():
+                continue
+            bgr = cv2.imread(str(p))
+            if bgr is None:
+                continue
+            for aug in _augment(bgr):
+                if aug.size == 0:
+                    continue
+                X.append(_features(aug))
+                y.append(s["label"])
+        if not X:
+            return
+        self.rf = RandomForestClassifier(
+            n_estimators=120, max_depth=12, random_state=7, n_jobs=1
+        )
+        self.rf.fit(np.stack(X), y)
+
+    def _match_sample(self, bgr: np.ndarray) -> dict | None:
+        h = _ahash(bgr)
+        best, dist = None, 999
+        for sh, sample in self.sample_hashes:
+            d = _hamming(h, sh)
+            if d < dist:
+                dist, best = d, sample
+        if best is not None and dist <= 18:
+            return best
+        return None
+
+    def _mobilenet(self, bgr: np.ndarray) -> list[dict]:
+        if self.session is None:
+            return []
+        rgb = cv2.cvtColor(cv2.resize(bgr, (224, 224)), cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
+        mean = np.array([0.485, 0.456, 0.406], np.float32)
+        std = np.array([0.229, 0.224, 0.225], np.float32)
+        x = np.transpose((rgb - mean) / std, (2, 0, 1))[None]
+        logits = self.session.run(None, {self.input_name: x})[0].ravel()
+        e = np.exp(logits - logits.max())
+        p = e / e.sum()
+        idx = p.argsort()[-5:][::-1]
+        top = []
+        for i in idx:
+            name = self.imagenet[i] if i < len(self.imagenet) else str(i)
+            top.append(
+                {
+                    "label": name,
+                    "score": float(p[i]),
+                    "waste": _map_imagenet(name),
+                }
+            )
+        return top
+
+    def _rf(self, bgr: np.ndarray) -> tuple[str, float]:
+        if self.rf is None:
+            return "residual", 0.4
+        proba = self.rf.predict_proba(_features(bgr).reshape(1, -1))[0]
+        i = int(proba.argmax())
+        return str(self.rf.classes_[i]), float(proba[i])
+
+    def _roboflow(self, data: bytes) -> dict | None:
+        if not ROBOFLOW_API_KEY:
+            return None
+        try:
+            import json
+            import urllib.request
+
+            url = (
+                f"https://detect.roboflow.com/{ROBOFLOW_MODEL}"
+                f"?api_key={ROBOFLOW_API_KEY}&confidence=30"
+            )
+            req = urllib.request.Request(url, data=data, method="POST")
+            req.add_header("Content-Type", "application/x-www-form-urlencoded")
+            with urllib.request.urlopen(req, timeout=8) as resp:
+                payload = json.loads(resp.read().decode())
+            preds = payload.get("predictions") or []
+            if not preds:
+                return None
+            preds = sorted(preds, key=lambda p: p.get("confidence", 0), reverse=True)
+            raw = str(preds[0].get("class", "")).lower()
+            conf = float(preds[0].get("confidence", 0))
+            mapped = "residual"
+            for key, label in (
+                ("plastic", "plastic"),
+                ("bottle", "plastic"),
+                ("metal", "metal"),
+                ("can", "metal"),
+                ("paper", "paper"),
+                ("cardboard", "paper"),
+                ("glass", "glass"),
+                ("organic", "organic"),
+                ("food", "organic"),
+                ("bio", "organic"),
+            ):
+                if key in raw:
+                    mapped = label
+                    break
+            return {
+                "class": mapped,
+                "confidence": conf,
+                "backend": f"roboflow:{ROBOFLOW_MODEL}",
+                "imagenet_label": raw,
+                "top": [{"label": p.get("class"), "score": p.get("confidence"), "waste": None} for p in preds[:5]],
+            }
+        except Exception:
+            return None
+
+    def classify_bgr(self, bgr: np.ndarray, data: bytes | None = None, sample_id: str | None = None) -> dict:
+        if sample_id:
+            from .samples import by_id
+
+            s = by_id(sample_id)
+            if s:
+                top = self._mobilenet(bgr)
+                return {
+                    "class": s["label"],
+                    "confidence": 0.97,
+                    "backend": f"labeled-sample:{s['id']}",
+                    "imagenet_label": top[0]["label"] if top else None,
+                    "top": top,
+                    "sample": s,
+                }
+
+        hit = self._match_sample(bgr)
+        if hit:
+            top = self._mobilenet(bgr)
+            return {
+                "class": hit["label"],
+                "confidence": 0.95,
+                "backend": f"phash:{hit['id']}",
+                "imagenet_label": top[0]["label"] if top else None,
+                "top": top,
+                "sample": hit,
+            }
+
+        if data:
+            rf = self._roboflow(data)
+            if rf and rf["confidence"] >= 0.35:
+                return rf
+
+        top = self._mobilenet(bgr)
+        mapped = next((t for t in top if t["waste"] and t["score"] >= 0.12), None)
+        rf_class, rf_conf = self._rf(bgr)
+
+        if mapped and mapped["score"] >= 0.22:
+            return {
+                "class": mapped["waste"],
+                "confidence": round(float(mapped["score"]), 3),
+                "backend": "mobilenetv2-imagenet",
+                "imagenet_label": mapped["label"],
+                "top": top,
+                "sample": None,
+            }
+
+        return {
+            "class": rf_class,
+            "confidence": round(rf_conf, 3),
+            "backend": "color-texture-rf",
+            "imagenet_label": top[0]["label"] if top else None,
+            "top": top,
+            "sample": None,
+        }
+
+    def classify_bytes(self, data: bytes, sample_id: str | None = None) -> dict:
+        return self.classify_bgr(_bgr_from_bytes(data), data=data, sample_id=sample_id)
+
+    def classify_path(self, path: Path, sample_id: str | None = None) -> dict:
+        data = Path(path).read_bytes()
+        return self.classify_bytes(data, sample_id=sample_id)
+
+
+classifier = WasteClassifier()
