@@ -19,7 +19,16 @@ ROBOFLOW_MODEL = os.getenv("ROBOFLOW_MODEL", "garbage-classification-3/2")
 # Dedicated waste-texture SigLIP2 classifier (HuggingFace transformers).
 # Any SiglipForImageClassification checkpoint works — override with SIGLIP_MODEL.
 SIGLIP_MODEL = os.getenv("SIGLIP_MODEL", "prithivMLmods/Augmented-Waste-Classifier-SigLIP2")
-SIGLIP_THRESHOLD = float(os.getenv("SIGLIP_THRESHOLD", "0.40"))
+# Accept SigLIP2 above this raw top-1 confidence; otherwise a top-1-vs-top-2
+# margin of SIGLIP_MARGIN is still accepted (it is a waste-specialised head and
+# always stronger than the fallbacks). Keep low so it never loses to RF.
+SIGLIP_THRESHOLD = float(os.getenv("SIGLIP_THRESHOLD", "0.25"))
+SIGLIP_MARGIN = float(os.getenv("SIGLIP_MARGIN", "0.10"))
+
+# Base (non-fine-tuned) SigLIP2 used only as an optical tie-break grader for
+# the metal-vs-glass confusion — zero-shot prompt similarity, decorrelated
+# from both fine-tune heads.
+SIGLIP2_GRADER_MODEL = os.getenv("SIGLIP2_GRADER_MODEL", "google/siglip2-base-patch16-224")
 
 # Its 10 output classes → BIN-GENIE plant taxonomy. The disc has no e-waste
 # bay today, so battery/clothes/shoes/trash land on RS-04 residual.

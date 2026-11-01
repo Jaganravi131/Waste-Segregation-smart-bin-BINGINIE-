@@ -83,4 +83,9 @@ src/                 marketing site
 
 Offline vision order: labelled sample → optional Roboflow → **SigLIP2 waste classifier** (`prithivMLmods/Augmented-Waste-Classifier-SigLIP2`) → MobileNetV2 waste map → color-texture forest → sensor fusion.
 
+**Detection hardening (2026-11):**
+- *Adaptive TTA* — when the top-1 confidence is below 0.85 a second SigLIP2 pass on the centre crop is averaged in (desk shots with the item small/off-centre stay accurate).
+- *Margin acceptance* — SigLIP2 is accepted when `top1 ≥ SIGLIP_THRESHOLD` (default `0.25`) **or** the top-1/top-2 margin ≥ `SIGLIP_MARGIN` (default `0.10`). A waste-specialised head now never loses to the color-texture fallback.
+- *Optical metal/glass tie-break* — the two fine-tuned heads confuse clear glass with metal. Physics settles it: metals are opaque, clear glass is see-through. A background-transparency metric (corner-estimated, tolerance-adaptive) plus a zero-shot base-SigLIP2 grader (`google/siglip2-base-patch16-224`, `SIGLIP2_GRADER_MODEL`) flip `metal → glass` only when the object is measurably transparent. A true metal item misrouted this way is still caught by the inductive coil on real hardware.
+
 **Live camera** (`plant/static/js/app.js` → `#btnLive`): probe frames classify every ~1.6 s without touching the disc or the ledger; a sort only fires after the same class is confirmed on two consecutive frames.

@@ -27,7 +27,9 @@ from .config import (
     ROBOFLOW_MODEL,
     SIGLIP_MODEL,
     SIGLIP_THRESHOLD,
+    SIGLIP_MARGIN,
     SIGLIP_TO_WASTE,
+    SIGLIP2_GRADER_MODEL,
 )
 from .samples import SAMPLES, path_for
 
@@ -130,6 +132,57 @@ def _map_imagenet(name: str) -> str | None:
     return None
 
 
+def _transparent_frac(bgr: np.ndarray) -> float:
+    """Fraction of the central object area that shows the background through.
+
+    Metals are opaque by physics; clear container glass is not. When the waste
+    models disagree between 'metal' and 'glass' (their most common confusion)
+    this metric settles it: a see-through item is glass, never metal.
+    Background colour is estimated from the frame corners (safer than the
+    full border ring — the object may touch vertical edges), and the match
+    tolerance adapts to the background's own noise level.
+    """
+    h, w = bgr.shape[:2]
+    y0, x0 = int(h * 0.28), int(w * 0.28)
+    y1, x1 = int(h * 0.72), int(w * 0.72)
+    if y1 - y0 < 4 or x1 - x0 < 4:
+        return 0.0
+    m = max(12, int(min(h, w) * 0.04))
+    corner = np.concatenate(
+        [
+            bgr[:m, :m].reshape(-1, 3),
+            bgr[:m, -m:].reshape(-1, 3),
+            bgr[-m:, :m].reshape(-1, 3),
+            bgr[-m:, -m:].reshape(-1, 3),
+        ]
+    ).astype(np.float32)
+    bg = np.median(corner, axis=0)
+    tol = max(20.0, 2.5 * float(corner.std(axis=0).max()))
+    center = bgr[y0:y1, x0:x1].astype(np.float32)
+    close = np.abs(center - bg).max(axis=2) <= tol
+    return float(close.mean())
+
+
+def _center_crop(bgr: np.ndarray, ratio: float = 0.7) -> np.ndarray:
+    h, w = bgr.shape[:2]
+    ch, cw = int(h * ratio), int(w * ratio)
+    y0, x0 = (h - ch) // 2, (w - cw) // 2
+    return bgr[y0 : y0 + ch, x0 : x0 + cw]
+
+
+# Zero-shot prompts for the optical grader (metal-vs-glass tie-break only).
+_METAL_PROMPTS = [
+    "a photo of a shiny opaque metal can",
+    "an opaque metallic tin",
+    "a crumpled aluminium can",
+]
+_GLASS_PROMPTS = [
+    "a photo of a transparent glass jar",
+    "see-through clear glass",
+    "a clear transparent glass container",
+]
+
+
 class WasteClassifier:
     def __init__(self):
         self.session = None
@@ -141,10 +194,76 @@ class WasteClassifier:
         self.siglip_processor = None
         self.siglip_labels: list[str] = []
         self._siglip_lock = threading.Lock()
+        self.grader = None
+        self.grader_processor = None
+        self.grader_text = None
+        self._grader_lock = threading.Lock()
         self._load_onnx()
         self._load_siglip()
+        self._load_grader()
         self._index_samples()
         self._train_rf()
+
+    def _load_grader(self):
+        """Base SigLIP2 (image-tower-only use) as a zero-shot metal/glass grader.
+
+        Decorrelated from the two fine-tuned heads: where they consistently
+        confuse clear glass with metal, the base model scoring against natural
+        language prompts ('transparent glass' vs 'opaque metal') settles it.
+        Failure is non-fatal — the tie-break is then skipped.
+        """
+        try:
+            import torch
+            from transformers import (
+                AutoImageProcessor,
+                AutoTokenizer,
+                SiglipModel,
+            )
+
+            self.grader = SiglipModel.from_pretrained(
+                SIGLIP2_GRADER_MODEL, torch_dtype=torch.float32
+            ).eval()
+            self.grader_processor = AutoImageProcessor.from_pretrained(
+                SIGLIP2_GRADER_MODEL
+            )
+            tok = AutoTokenizer.from_pretrained(SIGLIP2_GRADER_MODEL)
+            prompts = _METAL_PROMPTS + _GLASS_PROMPTS
+            with torch.no_grad():
+                enc = tok(prompts, padding=True, truncation=True, return_tensors="pt")
+                out = self.grader.get_text_features(**enc)
+            t = out.pooler_output if hasattr(out, "pooler_output") else out
+            self.grader_text = torch.nn.functional.normalize(t, dim=-1)
+            print(f"[classifier] SigLIP2 optical grader ready: {SIGLIP2_GRADER_MODEL}")
+        except Exception as e:
+            self.grader = None
+            print(
+                f"[classifier] SigLIP2 grader unavailable ({e.__class__.__name__}: {e})"
+                " — metal/glass tie-break degrades to the transparency metric"
+            )
+
+    def _grade_glass_metal(self, bgr: np.ndarray) -> str:
+        """'glass' | 'metal' | '' via zero-shot prompt similarity.
+
+        Empty string = no grader, caller falls back to _transparent_frac().
+        """
+        if self.grader is None:
+            return ""
+        import torch
+
+        pil = Image.fromarray(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB))
+        with self._grader_lock:
+            with torch.no_grad():
+                inputs = self.grader_processor(images=pil, return_tensors="pt")
+                if "pixel_values" in inputs:
+                    inputs = {"pixel_values": inputs["pixel_values"]}
+                out = self.grader.get_image_features(**inputs)
+            img = out.pooler_output if hasattr(out, "pooler_output") else out
+            img = torch.nn.functional.normalize(img, dim=-1)
+            sims = (img @ self.grader_text.T).squeeze(0).tolist()
+        n_met, n_gls = len(_METAL_PROMPTS), len(_GLASS_PROMPTS)
+        metal = max(sims[:n_met])
+        glass = max(sims[n_met : n_met + n_gls])
+        return "glass" if glass > metal else "metal"
 
     def _load_siglip(self):
         """Load the dedicated waste SigLIP2 model.
@@ -171,17 +290,30 @@ class WasteClassifier:
                 " — RoboFlow / MobileNetV2 / color-texture RF stay in the cascade"
             )
 
+    def _siglip_probs(self, bgr: np.ndarray) -> list[float]:
+        """Single SigLIP2 forward pass → softmax vector (called with lock held)."""
+        import torch
+
+        pil = Image.fromarray(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB))
+        inputs = self.siglip_processor(images=pil, return_tensors="pt")
+        with torch.no_grad():
+            logits = self.siglip(**inputs).logits
+        return torch.softmax(logits, dim=-1).squeeze(0).tolist()
+
     def _siglip(self, bgr: np.ndarray) -> dict | None:
         if self.siglip is None:
             return None
         import torch
 
-        pil = Image.fromarray(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB))
         with self._siglip_lock:  # serialize CPU inference across request threads
-            inputs = self.siglip_processor(images=pil, return_tensors="pt")
-            with torch.no_grad():
-                logits = self.siglip(**inputs).logits
-            probs = torch.softmax(logits, dim=-1).squeeze(0).tolist()
+            probs = self._siglip_probs(bgr)
+            # Adaptive TTA: a desk photo with the item far from centre scores
+            # weakly on the full frame; a second pass on the centre crop and
+            # averaging both stabilises the result. Only paid when needed.
+            best = probs.index(max(probs))
+            if probs[best] < 0.85:
+                crop = self._siglip_probs(_center_crop(bgr))
+                probs = [(a + b) / 2.0 for a, b in zip(probs, crop)]
         idx = sorted(range(len(probs)), key=lambda i: probs[i], reverse=True)[:5]
         top = []
         for i in idx:
@@ -368,8 +500,27 @@ class WasteClassifier:
                 return rf
 
         sig = self._siglip(bgr)
-        if sig and sig["confidence"] >= SIGLIP_THRESHOLD:
-            return sig
+        if sig:
+            top1 = sig["confidence"]
+            runner = sig["top"][1]["score"] if len(sig["top"]) > 1 else 0.0
+            # Waste-specialised head: accept on raw confidence OR a clear
+            # top-1/top-2 margin. It must never lose to the color-texture RF.
+            if top1 >= SIGLIP_THRESHOLD or (top1 - runner) >= SIGLIP_MARGIN:
+                # Metal is opaque; clear glass is not. Both fine-tuned heads
+                # confuse transparent glass with metal — settle it optically
+                # with the zero-shot grader (transparency metric fallback).
+                if sig["class"] == "metal":
+                    verdict = self._grade_glass_metal(bgr)
+                    if verdict != "glass" and _transparent_frac(bgr) >= 0.30:
+                        verdict = "glass"
+                    if verdict == "glass":
+                        sig = {
+                            **sig,
+                            "class": "glass",
+                            "confidence": round(max(0.5, top1), 3),
+                            "backend": sig["backend"] + "+optical",
+                        }
+                return sig
 
         top = self._mobilenet(bgr)
         mapped = next((t for t in top if t["waste"] and t["score"] >= 0.12), None)
