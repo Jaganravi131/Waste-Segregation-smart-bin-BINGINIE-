@@ -16,6 +16,26 @@ UPLOADS.mkdir(parents=True, exist_ok=True)
 ROBOFLOW_API_KEY = os.getenv("ROBOFLOW_API_KEY", "").strip()
 ROBOFLOW_MODEL = os.getenv("ROBOFLOW_MODEL", "garbage-classification-3/2")
 
+# Dedicated waste-texture SigLIP2 classifier (HuggingFace transformers).
+# Any SiglipForImageClassification checkpoint works — override with SIGLIP_MODEL.
+SIGLIP_MODEL = os.getenv("SIGLIP_MODEL", "prithivMLmods/Augmented-Waste-Classifier-SigLIP2")
+SIGLIP_THRESHOLD = float(os.getenv("SIGLIP_THRESHOLD", "0.40"))
+
+# Its 10 output classes → BIN-GENIE plant taxonomy. The disc has no e-waste
+# bay today, so battery/clothes/shoes/trash land on RS-04 residual.
+SIGLIP_TO_WASTE = {
+    "battery": "residual",
+    "biological": "organic",
+    "cardboard": "paper",
+    "clothes": "residual",
+    "glass": "glass",
+    "metal": "metal",
+    "paper": "paper",
+    "plastic": "plastic",
+    "shoes": "residual",
+    "trash": "residual",
+}
+
 BINS = {
     "plastic_metal": {
         "id": "PM-01",

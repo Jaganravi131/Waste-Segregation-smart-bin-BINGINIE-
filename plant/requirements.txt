@@ -10,3 +10,7 @@ pyserial
 jinja2
 python-dotenv
 aiofiles
+# SigLIP2 waste classifier backend (torch first run also pulls ~350 MB of
+# model weights into the HF cache — CPU inference only, no CUDA install):
+transformers>=4.51
+torch>=2.6

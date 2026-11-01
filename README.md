@@ -81,4 +81,6 @@ demo/                simulation + process-flow diagram
 src/                 marketing site
 ```
 
-Offline vision order: labelled sample → optional Roboflow → MobileNetV2 waste map → color-texture forest → sensor fusion.
+Offline vision order: labelled sample → optional Roboflow → **SigLIP2 waste classifier** (`prithivMLmods/Augmented-Waste-Classifier-SigLIP2`) → MobileNetV2 waste map → color-texture forest → sensor fusion.
+
+**Live camera** (`plant/static/js/app.js` → `#btnLive`): probe frames classify every ~1.6 s without touching the disc or the ledger; a sort only fires after the same class is confirmed on two consecutive frames.

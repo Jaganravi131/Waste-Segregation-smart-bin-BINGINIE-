@@ -3,14 +3,16 @@
 Backends, in order:
   1. Labeled sample / perceptual-hash hit  (calibration set)
   2. Roboflow HTTP  (optional — set ROBOFLOW_API_KEY)
-  3. MobileNetV2 ImageNet → waste taxonomy
-  4. Color-texture RandomForest trained on the on-disk sample gallery
+  3. SigLIP2 waste classifier  (HuggingFace transformers, offline after first pull)
+  4. MobileNetV2 ImageNet → waste taxonomy
+  5. Color-texture RandomForest trained on the on-disk sample gallery
 
 The gallery is the proof set. Arbitrary webcam frames use 2 then 3 then 4.
 """
 from __future__ import annotations
 
 import io
+import threading
 from pathlib import Path
 
 import cv2
@@ -18,7 +20,15 @@ import numpy as np
 from PIL import Image
 from sklearn.ensemble import RandomForestClassifier
 
-from .config import ONNX_PATH, IMAGENET_LABELS, ROBOFLOW_API_KEY, ROBOFLOW_MODEL
+from .config import (
+    ONNX_PATH,
+    IMAGENET_LABELS,
+    ROBOFLOW_API_KEY,
+    ROBOFLOW_MODEL,
+    SIGLIP_MODEL,
+    SIGLIP_THRESHOLD,
+    SIGLIP_TO_WASTE,
+)
 from .samples import SAMPLES, path_for
 
 WASTE_LABELS = ["plastic", "metal", "paper", "glass", "organic"]
@@ -127,9 +137,71 @@ class WasteClassifier:
         self.imagenet = []
         self.rf = None
         self.sample_hashes: list[tuple[np.ndarray, dict]] = []
+        self.siglip = None
+        self.siglip_processor = None
+        self.siglip_labels: list[str] = []
+        self._siglip_lock = threading.Lock()
         self._load_onnx()
+        self._load_siglip()
         self._index_samples()
         self._train_rf()
+
+    def _load_siglip(self):
+        """Load the dedicated waste SigLIP2 model.
+
+        First call downloads the weights (~350 MB) into the HF cache; later
+        boots are fully offline. Failure never blocks the plant — the cascade
+        simply drops back to Roboflow / MobileNetV2 / color-texture RF.
+        """
+        try:
+            import torch
+            from transformers import AutoImageProcessor, SiglipForImageClassification
+
+            self.siglip = SiglipForImageClassification.from_pretrained(
+                SIGLIP_MODEL, torch_dtype=torch.float32
+            ).eval()
+            self.siglip_processor = AutoImageProcessor.from_pretrained(SIGLIP_MODEL)
+            id2label = getattr(self.siglip.config, "id2label", {})
+            self.siglip_labels = [id2label[k] for k in sorted(id2label)]
+            print(f"[classifier] SigLIP2 waste model ready: {SIGLIP_MODEL}")
+        except Exception as e:
+            self.siglip = None
+            print(
+                f"[classifier] SigLIP2 unavailable ({e.__class__.__name__}: {e})"
+                " — RoboFlow / MobileNetV2 / color-texture RF stay in the cascade"
+            )
+
+    def _siglip(self, bgr: np.ndarray) -> dict | None:
+        if self.siglip is None:
+            return None
+        import torch
+
+        pil = Image.fromarray(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB))
+        with self._siglip_lock:  # serialize CPU inference across request threads
+            inputs = self.siglip_processor(images=pil, return_tensors="pt")
+            with torch.no_grad():
+                logits = self.siglip(**inputs).logits
+            probs = torch.softmax(logits, dim=-1).squeeze(0).tolist()
+        idx = sorted(range(len(probs)), key=lambda i: probs[i], reverse=True)[:5]
+        top = []
+        for i in idx:
+            label = self.siglip_labels[i] if i < len(self.siglip_labels) else str(i)
+            top.append(
+                {
+                    "label": label,
+                    "score": round(float(probs[i]), 4),
+                    "waste": SIGLIP_TO_WASTE.get(label.lower()),
+                }
+            )
+        best = top[0]
+        return {
+            "class": SIGLIP_TO_WASTE.get(best["label"].lower(), "residual"),
+            "confidence": round(float(best["score"]), 3),
+            "backend": f"siglip2:{SIGLIP_MODEL.rsplit('/', 1)[-1]}",
+            "imagenet_label": best["label"],
+            "top": top,
+            "sample": None,
+        }
 
     def _load_onnx(self):
         if not ONNX_PATH.exists():
@@ -294,6 +366,10 @@ class WasteClassifier:
             rf = self._roboflow(data)
             if rf and rf["confidence"] >= 0.35:
                 return rf
+
+        sig = self._siglip(bgr)
+        if sig and sig["confidence"] >= SIGLIP_THRESHOLD:
+            return sig
 
         top = self._mobilenet(bgr)
         mapped = next((t for t in top if t["waste"] and t["score"] >= 0.12), None)

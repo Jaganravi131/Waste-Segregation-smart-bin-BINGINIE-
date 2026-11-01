@@ -7,7 +7,7 @@ from fastapi.staticfiles import StaticFiles
 from .config import ROOT, UPLOADS, BINS, TIPS
 from . import db
 from .hardware import hardware
-from .pipeline import run_bytes, run_sample
+from .pipeline import run_bytes, run_sample, probe_bytes
 from .samples import SAMPLES
 
 app = FastAPI(title="BIN-GENIE", version="2.0.0")
@@ -66,8 +66,17 @@ async def classify(
     file: UploadFile | None = File(default=None),
     sample_id: str | None = Form(default=None),
     source: str = Form(default="upload"),
+    probe: str = Form(default=""),
 ):
     try:
+        if probe in ("1", "true", "yes"):
+            # Live-camera probe: classify the frame without actuating or logging.
+            if not file:
+                return JSONResponse({"error": "Live probe needs a camera frame"}, status_code=400)
+            data = await file.read()
+            if not data:
+                return JSONResponse({"error": "Empty file"}, status_code=400)
+            return probe_bytes(data, source=source or "live")
         if sample_id:
             result = run_sample(sample_id, source=source or "sample")
             return result

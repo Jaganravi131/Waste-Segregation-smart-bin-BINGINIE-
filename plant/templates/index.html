@@ -144,9 +144,11 @@
               <div class="row">
                 <button class="btn" id="btnCam">Open camera</button>
                 <button class="btn primary" id="btnSnap">Capture &amp; sort</button>
+                <button class="btn" id="btnLive">▶ LIVE</button>
               </div>
+              <p class="hint" id="liveHint" hidden></p>
             </div>
-            <p class="hint">No GPU required. Gallery items are the labeled calibration set. Arbitrary photos go through MobileNetV2 → waste map, then the color-texture forest.</p>
+            <p class="hint">No GPU required. Gallery items are the labeled calibration set. Arbitrary frames go through the SigLIP2 waste classifier → Roboflow → MobileNetV2 waste map, then the color-texture forest.</p>
           </div>
 
           <div class="panel">

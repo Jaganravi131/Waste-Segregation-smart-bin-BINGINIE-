@@ -267,29 +267,115 @@ $$(".tab").forEach((t) => {
 
 $("#btnCam").addEventListener("click", async () => {
   try {
-    state.camStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
+    state.camStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment", width: 1280, height: 720 } });
     $("#cam").srcObject = state.camStream;
   } catch (e) {
     toast("Camera blocked — use upload instead");
   }
 });
-$("#btnSnap").addEventListener("click", async () => {
+
+/* ---------- live camera loop ----------
+   Probe frames stream through the classifier every ~1.6 s WITHOUT actuating
+   the disc. A sort only fires when the same winning class is confirmed on
+   two consecutive stable frames (and every probe calls shows it). */
+const live = {
+  on: false,
+  busy: false,
+  timer: null,
+  stable: { cls: null, n: 0 },
+  lastSorted: null,
+};
+
+function snapFile() {
   const v = $("#cam");
-  if (!v.srcObject) {
-    toast("Open the camera first");
-    return;
-  }
+  if (!v.srcObject) return Promise.reject(new Error("Open the camera first"));
   const c = document.createElement("canvas");
   c.width = v.videoWidth || 640;
   c.height = v.videoHeight || 480;
   c.getContext("2d").drawImage(v, 0, 0);
-  c.toBlob(async (blob) => {
-    const f = new File([blob], "webcam.jpg", { type: "image/jpeg" });
+  return new Promise((res) =>
+    c.toBlob((b) => res(b ? new File([b], "live.jpg", { type: "image/jpeg" }) : null), "image/jpeg", 0.9)
+  );
+}
+
+async function sendFrame(f, probe) {
+  const fd = new FormData();
+  fd.append("file", f);
+  fd.append("source", probe ? "live" : "webcam");
+  if (probe) fd.append("probe", "1");
+  return api("/api/classify", { method: "POST", body: fd });
+}
+
+function liveStatus(text) {
+  const el = $("#btnLive");
+  el.textContent = "▪ LIVE " + text;
+}
+
+async function liveFrame() {
+  if (live.busy || !live.on) return;
+  live.busy = true;
+  try {
+    const f = await snapFile().catch(() => null);
+    if (!f) throw new Error("no frame — open the camera");
     $("#preview").src = URL.createObjectURL(f);
     $("#preview").hidden = false;
-    try { await classifyFile(f, "webcam"); }
-    catch (err) { toast(err.message); }
-  }, "image/jpeg", 0.9);
+    const res = await sendFrame(f, true);
+    applySensors(res.sensors);
+    const bin = res.fusion && BAY_META[res.fusion.bin];
+    liveStatus(
+      `${res.visual.class} ${(res.visual.confidence * 100).toFixed(0)}% · ${bin ? bin.id : "—"}`
+    );
+    const cls = res.visual.class;
+    live.stable =
+      live.stable.cls === cls ? { cls, n: live.stable.n + 1 } : { cls, n: 1 };
+    if (live.stable.n >= 2 && live.lastSorted !== cls) {
+      live.lastSorted = cls;
+      live.stable.n = 0;
+      // Real pass — actuates the disc, writes the ledger row and ticket.
+      const full = await sendFrame(f, false);
+      playSort(full);
+      toast(`LIVE SORT · ${cls} → ${BAY_META[full.fusion.bin]?.id || "—"}`);
+    }
+  } catch (e) {
+    liveStatus("⏸ " + (e.message || e));
+    console.warn("live", e);
+  }
+  live.busy = false;
+}
+
+function toggleLive() {
+  live.on = !live.on;
+  $("#btnLive").classList.toggle("primary", live.on);
+  if (live.on) {
+    if (!state.camStream) $("#btnCam").click();
+    live.stable = { cls: null, n: 0 };
+    live.lastSorted = null;
+    live.timer = setInterval(liveFrame, 1600);
+    liveStatus("starting…");
+    toast("Live ON — hold the item steady, two frames to a sort");
+  } else {
+    clearInterval(live.timer);
+    $("#btnLive").textContent = "▶ LIVE";
+    $("#liveHint").hidden = true;
+  }
+}
+$("#btnLive").addEventListener("click", toggleLive);
+
+$("#btnSnap").addEventListener("click", async () => {
+  const f = await snapFile().catch(() => null);
+  if (!f) {
+    toast("Open the camera first");
+    return;
+  }
+  $("#preview").src = URL.createObjectURL(f);
+  $("#preview").hidden = false;
+  try {
+    const res = await sendFrame(f, false);
+    playSort(res);
+    toast(`${res.visual.class} → ${BAY_META[res.fusion.bin]?.id || "—"}`);
+  } catch (err) {
+    toast(err.message);
+  }
 });
 
 /* ---------- proof ---------- */

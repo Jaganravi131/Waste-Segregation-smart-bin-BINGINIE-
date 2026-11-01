@@ -113,6 +113,25 @@ def run_bytes(data: bytes, source: str = "upload", sample_id: str | None = None,
     }
 
 
+def probe_bytes(data: bytes, source: str = "live") -> dict:
+    """Classify-only pass for the live camera feed.
+
+    No actuator, no ledger row — the sort fires only after the frame is
+    stable, sent through the normal run_bytes() path.
+    """
+    visual = classifier.classify_bytes(data)
+    sensors = hardware.sense_for(visual["class"])
+    fused = fuse(visual["class"], sensors)
+    return {
+        "ts": db.now_iso(),
+        "source": source,
+        "visual": visual,
+        "sensors": sensors,
+        "fusion": fused,
+        "bins": db.get_bins(),
+    }
+
+
 def run_sample(sample_id: str, source: str = "sample") -> dict:
     s = by_id(sample_id)
     if not s:
