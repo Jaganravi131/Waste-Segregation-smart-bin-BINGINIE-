@@ -32,6 +32,7 @@ from .config import (
     SIGLIP2_GRADER_MODEL,
 )
 from .samples import SAMPLES, path_for
+from .detector import detector
 
 WASTE_LABELS = ["plastic", "metal", "paper", "glass", "organic"]
 
@@ -499,7 +500,10 @@ class WasteClassifier:
             if rf and rf["confidence"] >= 0.35:
                 return rf
 
-        sig = self._siglip(bgr)
+        # YOLO localiser first: classify the detected item crop, not the desk.
+        crop, det = detector.locate(bgr)
+        view = crop if crop is not None else bgr
+        sig = self._siglip(view)
         if sig:
             top1 = sig["confidence"]
             runner = sig["top"][1]["score"] if len(sig["top"]) > 1 else 0.0
@@ -510,7 +514,7 @@ class WasteClassifier:
                 # confuse transparent glass with metal — settle it optically
                 # with the zero-shot grader (transparency metric fallback).
                 if sig["class"] == "metal":
-                    verdict = self._grade_glass_metal(bgr)
+                    verdict = self._grade_glass_metal(view)
                     if verdict != "glass" and _transparent_frac(bgr) >= 0.30:
                         verdict = "glass"
                     if verdict == "glass":
@@ -519,6 +523,18 @@ class WasteClassifier:
                             "class": "glass",
                             "confidence": round(max(0.5, top1), 3),
                             "backend": sig["backend"] + "+optical",
+                        }
+                if det is not None:
+                    sig["yolo"] = det
+                    prior = det.get("waste_prior")
+                    # Weak COCO prior rescues only a weak SigLIP2 verdict
+                    # (e.g. an e-waste gadget or a fruit the head never saw).
+                    if prior and top1 < 0.5 and prior != sig["class"]:
+                        sig = {
+                            **sig,
+                            "class": prior,
+                            "confidence": round(top1 * 0.5 + det["coco_conf"] * 0.5, 3),
+                            "backend": sig["backend"] + "+yolo",
                         }
                 return sig
 

@@ -36,3 +36,7 @@ plant/data/uploads/
 # generated sim parts (keep demo/*.mp4 only)
 sim_out/
 *.pyc
+
+# YOLO localiser weights (auto-download ~22 MB)
+yolov8n.pt
+yolov8s.pt

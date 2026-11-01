@@ -30,6 +30,13 @@ SIGLIP_MARGIN = float(os.getenv("SIGLIP_MARGIN", "0.10"))
 # from both fine-tune heads.
 SIGLIP2_GRADER_MODEL = os.getenv("SIGLIP2_GRADER_MODEL", "google/siglip2-base-patch16-224")
 
+# YOLO object localiser: crops the detected item out of the frame so the
+# SigLIP2 head sees the object, not the desk. COCO classes also give weak
+# priors (e-waste: phone / remote / laptop -> residual).
+YOLO_ENABLE = os.getenv("YOLO_ENABLE", "1") not in ("0", "false", "no")
+YOLO_MODEL = os.getenv("YOLO_MODEL", "yolov8s.pt")
+YOLO_CONF = float(os.getenv("YOLO_CONF", "0.30"))
+
 # Its 10 output classes → BIN-GENIE plant taxonomy. The disc has no e-waste
 # bay today, so battery/clothes/shoes/trash land on RS-04 residual.
 SIGLIP_TO_WASTE = {

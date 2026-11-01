@@ -81,7 +81,7 @@ demo/                simulation + process-flow diagram
 src/                 marketing site
 ```
 
-Offline vision order: labelled sample → optional Roboflow → **SigLIP2 waste classifier** (`prithivMLmods/Augmented-Waste-Classifier-SigLIP2`) → MobileNetV2 waste map → color-texture forest → sensor fusion.
+Offline vision order: YOLO localiser → labelled sample → optional Roboflow → **SigLIP2 waste classifier** (`prithivMLmods/Augmented-Waste-Classifier-SigLIP2`) → MobileNetV2 waste map → color-texture forest → sensor fusion. A COCO-pretrained YOLOv8 (`yolov8s.pt`, ~170 ms CPU) crops the detected item out of the webcam frame before classification, so the head sees the object rather than the desk; its COCO class doubles as a weak prior for streams the waste taxonomy cannot express (phone / remote / laptop → e-waste residual). Labeled-sample and perceptual-hash calibration always run on the full frame.
 
 **Detection hardening (2026-11):**
 - *Adaptive TTA* — when the top-1 confidence is below 0.85 a second SigLIP2 pass on the centre crop is averaged in (desk shots with the item small/off-centre stay accurate).

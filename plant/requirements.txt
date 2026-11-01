@@ -14,3 +14,6 @@ aiofiles
 # model weights into the HF cache — CPU inference only, no CUDA install):
 transformers>=4.51
 torch>=2.6
+# YOLO object localiser feeding the vision cascade (COCO pretrained, ~170 ms
+# CPU per frame; weights download on first boot into the repo working dir):
+ultralytics>=8.3
