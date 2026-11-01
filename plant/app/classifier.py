@@ -30,6 +30,7 @@ from .config import (
     SIGLIP_MARGIN,
     SIGLIP_TO_WASTE,
     SIGLIP2_GRADER_MODEL,
+    VISUAL_TO_BIN,
 )
 from .samples import SAMPLES, path_for
 from .detector import detector
@@ -169,6 +170,21 @@ def _center_crop(bgr: np.ndarray, ratio: float = 0.7) -> np.ndarray:
     ch, cw = int(h * ratio), int(w * ratio)
     y0, x0 = (h - ch) // 2, (w - cw) // 2
     return bgr[y0 : y0 + ch, x0 : x0 + cw]
+
+
+def _tta_views(bgr: np.ndarray) -> list[np.ndarray]:
+    """Heavy test-time augmentation for uncertain frames: ±15° rotation,
+    horizontal flip and lighting normalisation — the transforms real-world
+    trash data needs (crushed, stained, partially blocked items)."""
+    h, w = bgr.shape[:2]
+    views = [cv2.flip(bgr, 1)]
+    for ang in (-15.0, 15.0):
+        M = cv2.getRotationMatrix2D((w / 2.0, h / 2.0), ang, 1.0)
+        views.append(
+            cv2.warpAffine(bgr, M, (w, h), borderMode=cv2.BORDER_REPLICATE)
+        )
+    views.append(cv2.convertScaleAbs(bgr, alpha=1.25, beta=10))
+    return views
 
 
 # Zero-shot prompts for the optical grader (metal-vs-glass tie-break only).
@@ -314,7 +330,21 @@ class WasteClassifier:
             best = probs.index(max(probs))
             if probs[best] < 0.85:
                 crop = self._siglip_probs(_center_crop(bgr))
-                probs = [(a + b) / 2.0 for a, b in zip(probs, crop)]
+                base = [(a + b) / 2.0 for a, b in zip(probs, crop)]
+                # Catch-all classes (Trash/Battery/Clothes/Shoes) are the weak
+                # end of the head, so when the frame stays uncertain pay for
+                # the heavy views too (±15° rotation, flip, lighting). They
+                # only *blend in* at low weight: heavy TTA must support the
+                # confident base, never out-vote it (catch-alls like Trash can
+                # drift an averaged full re-vote).
+                probs = base
+                if max(base) < 0.75:
+                    heavy = [self._siglip_probs(v) for v in _tta_views(bgr)]
+                    n = len(heavy)
+                    probs = [
+                        (b_ + 0.25 * sum(h[i] for h in heavy) / n) / 1.25
+                        for i, b_ in enumerate(base)
+                    ]
         idx = sorted(range(len(probs)), key=lambda i: probs[i], reverse=True)[:5]
         top = []
         for i in idx:
@@ -326,16 +356,26 @@ class WasteClassifier:
                     "waste": SIGLIP_TO_WASTE.get(label.lower()),
                 }
             )
-        best = top[0]
+        # Group pooling: raw label space lets the ill-defined catch-alls
+        # (Trash / Battery / Clothes / Shoes) split the residual mass between
+        # them, so a well-defined class can win on a technicality. The verdict
+        # is made on waste-group totals instead — each group is one competitor.
+        groups: dict[str, float] = {}
+        for i, p in enumerate(probs):
+            label = self.siglip_labels[i] if i < len(self.siglip_labels) else str(i)
+            w = SIGLIP_TO_WASTE.get(label.lower(), "residual")
+            groups[w] = groups.get(w, 0.0) + float(p)
+        ranked = sorted(groups.items(), key=lambda kv: kv[1], reverse=True)
+        gclass, gconf = ranked[0]
         return {
-            "class": SIGLIP_TO_WASTE.get(best["label"].lower(), "residual"),
-            "confidence": round(float(best["score"]), 3),
+            "class": gclass,
+            "confidence": round(float(gconf), 3),
             "backend": f"siglip2:{SIGLIP_MODEL.rsplit('/', 1)[-1]}",
-            "imagenet_label": best["label"],
+            "imagenet_label": top[0]["label"],
             "top": top,
             "sample": None,
+            "groups": [[k, round(v, 3)] for k, v in ranked[:4]],
         }
-
     def _load_onnx(self):
         if not ONNX_PATH.exists():
             return
@@ -500,13 +540,15 @@ class WasteClassifier:
             if rf and rf["confidence"] >= 0.35:
                 return rf
 
-        # YOLO localiser first: classify the detected item crop, not the desk.
-        crop, det = detector.locate(bgr)
-        view = crop if crop is not None else bgr
+        # YOLO localiser first: classify the detected item crop(s), not the desk.
+        crops = detector.locate_all(bgr, max_items=2)
+        det = crops[0][1] if crops else None
+        view = crops[0][0] if crops else bgr
         sig = self._siglip(view)
         if sig:
             top1 = sig["confidence"]
-            runner = sig["top"][1]["score"] if len(sig["top"]) > 1 else 0.0
+            # Runner-up in group-total space (same scale as top1).
+            runner = sig["groups"][1][1] if len(sig.get("groups", [])) > 1 else 0.0
             # Waste-specialised head: accept on raw confidence OR a clear
             # top-1/top-2 margin. It must never lose to the color-texture RF.
             if top1 >= SIGLIP_THRESHOLD or (top1 - runner) >= SIGLIP_MARGIN:
@@ -535,6 +577,37 @@ class WasteClassifier:
                             "class": prior,
                             "confidence": round(top1 * 0.5 + det["coco_conf"] * 0.5, 3),
                             "backend": sig["backend"] + "+yolo",
+                        }
+                # Mixed-stream rejection: a second large item in frame that
+                # certifies to a DIFFERENT bay cannot be sorted in one disc
+                # commit — route the commit to residual with the evidence.
+                if len(crops) > 1 and sig["class"] != "residual":
+                    sig2 = self._siglip(crops[1][0])
+                    bin1 = VISUAL_TO_BIN.get(sig["class"])
+                    bin2 = VISUAL_TO_BIN.get(sig2["class"]) if sig2 else None
+                    if (
+                        sig2
+                        and sig2["confidence"] >= 0.5
+                        and bin1 != bin2
+                    ):
+                        items = [
+                            {
+                                "class": sig["class"],
+                                "confidence": sig["confidence"],
+                                "coco": det.get("coco") if det else None,
+                            },
+                            {
+                                "class": sig2["class"],
+                                "confidence": sig2["confidence"],
+                                "coco": crops[1][1].get("coco"),
+                            },
+                        ]
+                        sig = {
+                            **sig,
+                            "class": "residual",
+                            "confidence": round(min(sig["confidence"], sig2["confidence"]), 3),
+                            "backend": sig["backend"] + "+mixed",
+                            "mixed_items": items,
                         }
                 return sig
 

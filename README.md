@@ -83,6 +83,13 @@ src/                 marketing site
 
 Offline vision order: YOLO localiser → labelled sample → optional Roboflow → **SigLIP2 waste classifier** (`prithivMLmods/Augmented-Waste-Classifier-SigLIP2`) → MobileNetV2 waste map → color-texture forest → sensor fusion. A COCO-pretrained YOLOv8 (`yolov8s.pt`, ~170 ms CPU) crops the detected item out of the webcam frame before classification, so the head sees the object rather than the desk; its COCO class doubles as a weak prior for streams the waste taxonomy cannot express (phone / remote / laptop → e-waste residual). Labeled-sample and perceptual-hash calibration always run on the full frame.
 
+### Vision decision rules (why accuracy holds up)
+
+- **Catch-all class bottleneck**: raw `Trash`/`Battery`/`Clothes`/`Shoes` predictions split the residual-side probability mass, so a well-defined class can win on a technicality. The SigLIP2 verdict is therefore made on **waste-group totals** (all residual-side labels pooled as one competitor), not raw top-1 labels.
+- **Test-time augmentation**: only paid when a frame stays uncertain (top-1 < 0.85 → centre-crop pass; still < 0.75 → ±15° rotation, flip and lighting-normalisation views blended in at low weight so they support the confident base instead of out-voting it), mirroring the transforms crushed/stained/partially-blocked items demand.
+- **Mixed-stream rejection**: YOLO may find two large, non-overlapping items. If they certify to different bays the commit cannot be sorted safely — the frame routes RS-04 Residual and the decision records both items; if both crops belong to the same bay (e.g. can + bottle → PM-01), the dominant item routes normally.
+- **Optical metal/glass tie-break**: metals are opaque, clear glass is see-through — a zero-shot SigLIP2 grader plus a corner-transparency metric settle the confusion in the vision stage only (simulated hardware sensor-veto fusion is left untouched).
+
 **Detection hardening (2026-11):**
 - *Adaptive TTA* — when the top-1 confidence is below 0.85 a second SigLIP2 pass on the centre crop is averaged in (desk shots with the item small/off-centre stay accurate).
 - *Margin acceptance* — SigLIP2 is accepted when `top1 ≥ SIGLIP_THRESHOLD` (default `0.25`) **or** the top-1/top-2 margin ≥ `SIGLIP_MARGIN` (default `0.10`). A waste-specialised head now never loses to the color-texture fallback.
