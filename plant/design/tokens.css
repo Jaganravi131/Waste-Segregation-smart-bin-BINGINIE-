@@ -1,0 +1,82 @@
+/* ============================================================
+   BIN-GENIE · design tokens v1.0
+   Source of truth: plant/design/DASHBOARD_DESIGN.md
+   Primitive → semantic layer. style.css must consume these.
+   ============================================================ */
+:root {
+  /* ---- primitives ------------------------------------------------ */
+  --bg-0:            #08110D;
+  --bg-1:            #0B120E;
+  --surface:         #101C16;
+  --surface-2:       #16241C;
+  --line:            #1E3A2C;
+
+  --lime:            #C6F25A;
+  --lime-dim:        #8FB83A;
+  --teal:            #3EE0C5;
+  --paper-hue:       #E7D7A3;
+  --glass-blue:      #7ECBFF;
+  --copper:          #E08A4A;
+  --rose:            #FF6B5D;
+  --ink:             #E7F3EA;
+  --muted:           #7F9A88;
+
+  /* ---- semantic -------------------------------------------------- */
+  --bg:              var(--bg-1);
+  --border:          rgba(30, 58, 44, .60);
+  --border-soft:     rgba(30, 58, 44, .35);
+  --text:            var(--ink);
+  --text-muted:      var(--muted);
+  --accent:          var(--lime);
+  --accent-dim:      var(--lime-dim);
+  --ai:              var(--teal);
+  --ok:              var(--lime);
+  --warn:            var(--copper);
+  --danger:          var(--rose);
+  --info:            var(--glass-blue);
+
+  /* bay coding — only for bay-owned elements */
+  --bay-pm:          var(--lime);
+  --bay-pa:          var(--paper-hue);
+  --bay-gl:          var(--glass-blue);
+  --bay-rs:          var(--copper);
+
+  /* ---- type ------------------------------------------------------ */
+  --font-display:    "Syne", sans-serif;       /* 600–800 */
+  --font-ui:         "IBM Plex Sans", sans-serif;
+  --font-mono:       "IBM Plex Mono", monospace;
+  --fs-display:      30px;
+  --fs-h2:           20px;
+  --fs-body:         14px;
+  --fs-label:        12px;
+  --fs-mono:         11px;
+
+  /* ---- space · shape · elevation --------------------------------- */
+  --sp-1: 4px;  --sp-2: 8px;  --sp-3: 12px;
+  --sp-4: 16px; --sp-5: 24px; --sp-6: 32px;
+  --r-panel: 12px; --r-card: 8px; --r-chip: 999px;
+  --border-w: 1px;
+  --e1: inset 0 1px 0 rgba(198, 242, 90, .06);
+  --e2: 0 8px 24px rgba(0, 0, 0, .35);
+
+  /* ---- motion ---------------------------------------------------- */
+  --t-hover:    150ms ease;
+  --t-panel:    250ms ease;
+  --t-disc:     700ms cubic-bezier(.2, .8, .2, 1);
+  --t-fly:      700ms ease;
+  --t-toast-in: 200ms ease;
+  --t-toast-out:120ms ease;
+
+  /* ---- glass (cam overlay, rail sheet, modal scrim) -------------- */
+  --glass-bg:    rgba(8, 17, 13, .55);
+  --glass-tint: rgba(255, 255, 255, .08);
+  --glass-blur: 14px;
+}
+
+/* ---- reduced motion: static snapshot rule ------------------------- */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --t-disc:  0ms linear;
+    --t-fly:   0ms linear;
+  }
+}

@@ -97,6 +97,11 @@ function applyBins(bins) {
     const n = $("#count-" + k);
     if (bar) bar.style.width = Math.min(100, v.fill) + "%";
     if (n) n.textContent = `${v.count} items · ${v.fill.toFixed(0)}%`;
+    const card = document.getElementById("bay-" + k);
+    if (card) {
+      card.classList.toggle("warn", v.fill >= 85 && v.fill < 100);
+      card.classList.toggle("full", v.fill >= 100);
+    }
   }
 }
 
@@ -141,12 +146,52 @@ function highlightBay(key) {
   if (el) el.classList.add("hot");
 }
 
+function renderDecision(res) {
+  /* Decision panel: backend chip, AI pill, probability bars, fusion verdicts */
+  if (!res || !res.visual) return;
+  const backend = res.visual.backend || "";
+  const vb = $("#visionBackend");
+  if (vb) vb.textContent = "vision: " + (backend.split(":").pop() || "—");
+  const aiPill = $("#aiPill");
+  if (aiPill && backend) {
+    aiPill.innerHTML = `<span class="dot ai"></span> AI: ${backend.split(":")[0].toUpperCase()}`;
+    aiPill.classList.remove("dim");
+  }
+  const top = (res.visual.top || []).filter((t) => t.score > 0.03).slice(0, 5);
+  const pb = $("#probBars");
+  if (pb) {
+    pb.innerHTML = top.length
+      ? top.map((t) =>
+          `<div class="prob"><span class="prob-lab">${t.label}</span>` +
+          `<span class="prob-bar"><i style="width:${Math.max(2, t.score * 100).toFixed(1)}%"></i></span>` +
+          `<span class="prob-val">${(t.score * 100).toFixed(0)}%</span></div>`
+        ).join("")
+      : `<p class="hint">No confident signal.</p>`;
+  }
+  const fc = $("#fusionCards");
+  if (fc && res.fusion) {
+    const reasons = res.fusion.reasons || [];
+    fc.innerHTML = reasons.map((r) => {
+      const cls = /aborted/i.test(r) ? "danger"
+        : /wins|force|contaminate|wet /i.test(r) ? "warn" : "ok";
+      return `<div class="verdict ${cls}"><span class="v-bot">${cls === "ok" ? "PASS" : cls === "warn" ? "VETO" : "STOP"}</span><span>${r}</span></div>`;
+    }).join("") || `<p class="hint">No reasons emitted.</p>`;
+  }
+  if (res.sort) {
+    const tel = $("#discTelemetry");
+    if (tel) {
+      tel.textContent = `ANGLE ${res.sort.disc_deg}° · FLAP ${res.sort.flap_deg}° · t=${res.sort.sort_ms} ms`;
+    }
+  }
+}
+
 function playSort(result) {
   state.last = result;
   if (result.ticket) $("#ticket").textContent = result.ticket;
   applySensors(result.sensors);
   applyBins(result.bins);
   applyHardware(result.hardware);
+  renderDecision(result);
   const bin = result.fusion && result.fusion.bin;
   if (bin && BAY_META[bin]) {
     highlightBay(bin);
@@ -281,6 +326,7 @@ $("#btnCam").addEventListener("click", async () => {
 const live = {
   on: false,
   busy: false,
+  infer: false,
   timer: null,
   stable: { cls: null, n: 0 },
   lastSorted: null,
@@ -306,9 +352,27 @@ async function sendFrame(f, probe) {
   return api("/api/classify", { method: "POST", body: fd });
 }
 
-function liveStatus(text) {
+function liveStatus(text, stableN) {
   const el = $("#btnLive");
-  el.textContent = "▪ LIVE " + text;
+  if (el) el.textContent = text ? "LIVE · " + text : (live.on ? "LIVE" : "▶ LIVE");
+  const chip = $("#probeChip");
+  if (chip) chip.hidden = !live.on;
+  const ovl = $("#camOverlay");
+  if (ovl) ovl.hidden = !live.infer;
+}
+
+function liveOverlay(res, stableN) {
+  if (!res || !res.visual) return;
+  const oc = $("#overlayClass"), ob = $("#overlayBar"), obay = $("#overlayBay"), ring = $("#stability");
+  const bin = res.fusion && BAY_META[res.fusion.bin];
+  const conf = res.visual.confidence || 0;
+  if (oc) oc.textContent = `${res.visual.class} ${(conf * 100).toFixed(0)}%`;
+  if (ob) ob.style.width = (Math.min(1, conf) * 100).toFixed(0) + "%";
+  if (obay) {
+    obay.textContent = bin ? bin.id : "—";
+    obay.style.color = bin ? bin.hue : "";
+  }
+  if (ring) ring.style.setProperty("--p", Math.min(stableN || 0, 2) / 2);
 }
 
 async function liveFrame() {
@@ -316,21 +380,25 @@ async function liveFrame() {
   live.busy = true;
   try {
     const f = await snapFile().catch(() => null);
-    if (!f) throw new Error("no frame — open the camera");
+    if (!f) throw new Error("open the camera first");
+    const res = await sendFrame(f, true);
     $("#preview").src = URL.createObjectURL(f);
     $("#preview").hidden = false;
-    const res = await sendFrame(f, true);
-    applySensors(res.sensors);
     const bin = res.fusion && BAY_META[res.fusion.bin];
-    liveStatus(
-      `${res.visual.class} ${(res.visual.confidence * 100).toFixed(0)}% · ${bin ? bin.id : "—"}`
-    );
+    live.infer = true;
     const cls = res.visual.class;
-    live.stable =
-      live.stable.cls === cls ? { cls, n: live.stable.n + 1 } : { cls, n: 1 };
+    live.stable = live.stable.cls === cls ? { cls, n: live.stable.n + 1 } : { cls, n: 1 };
+    liveOverlay(res, live.stable.n);
+    renderDecision(res);
+    liveStatus(
+      `${cls} ${(res.visual.confidence * 100).toFixed(0)}% → ${bin ? bin.id : "—"}${live.stable.n >= 2 ? " ✓" : ` ${live.stable.n}/2`}`,
+      live.stable.n
+    );
     if (live.stable.n >= 2 && live.lastSorted !== cls) {
       live.lastSorted = cls;
       live.stable.n = 0;
+      const ringEl = $("#stability");
+      if (ringEl) ringEl.style.setProperty("--p", 0);
       // Real pass — actuates the disc, writes the ledger row and ticket.
       const full = await sendFrame(f, false);
       playSort(full);
@@ -345,17 +413,26 @@ async function liveFrame() {
 
 function toggleLive() {
   live.on = !live.on;
-  $("#btnLive").classList.toggle("primary", live.on);
+  $("#btnLive").classList.toggle("live-on", live.on);
   if (live.on) {
     if (!state.camStream) $("#btnCam").click();
     live.stable = { cls: null, n: 0 };
     live.lastSorted = null;
+    live.infer = false;
     live.timer = setInterval(liveFrame, 1600);
     liveStatus("starting…");
     toast("Live ON — hold the item steady, two frames to a sort");
   } else {
     clearInterval(live.timer);
+    live.infer = false;
+    const chip = $("#probeChip");
+    if (chip) chip.hidden = true;
+    const ovl = $("#camOverlay");
+    if (ovl) ovl.hidden = true;
+    const ring = $("#stability");
+    if (ring) ring.style.setProperty("--p", 0);
     $("#btnLive").textContent = "▶ LIVE";
+    $("#btnLive").classList.remove("live-on");
     $("#liveHint").hidden = true;
   }
 }
@@ -420,8 +497,9 @@ async function loadAnalytics() {
     <tr>
       <td>${r.id}</td>
       <td>${String(r.ts).replace("T", " ").slice(0, 19)}</td>
-      <td>${r.source}</td>
-      <td>${r.visual_class} ${Number(r.visual_confidence).toFixed(2)}</td>
+      <td><span class="chip ${r.source === "seed" ? "src-seed" : ""}">${r.source}</span></td>
+      <td><span class="vis">${r.visual_class}</span> ${Number(r.visual_confidence).toFixed(2)}</td>
+      <td>${String(r.backend || "—").split(":").pop()}</td>
       <td>IR ${r.ir} · ${Math.round(r.moisture * 100)}% · M${r.metal}</td>
       <td>${r.fused_bin}</td>
       <td>${r.sort_ms}</td>

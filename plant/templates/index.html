@@ -22,26 +22,28 @@
         </svg>
       </div>
       <nav>
-        <button data-view="facility" class="on" title="Facility">
-          <span class="ico">⌂</span><span>Plant</span>
+        <button data-view="facility" class="on" title="Plant">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h5v-6h4v6h5V9.5"/></svg>
+          <span>Plant</span>
         </button>
-        <button data-view="classify" title="Classify">
-          <span class="ico">▣</span><span>Sort</span>
+        <button data-view="classify" title="Sort">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8V5.5A1.5 1.5 0 0 1 4.5 4H8"/><path d="M16 4h3.5A1.5 1.5 0 0 1 21 5.5V8"/><path d="M21 16v2.5a1.5 1.5 0 0 1-1.5 1.5H16"/><path d="M8 20H4.5A1.5 1.5 0 0 1 3 18.5V16"/><circle cx="12" cy="12" r="3.2"/></svg>
+          <span>Sort</span>
         </button>
-        <button data-view="analytics" title="Analytics">
-          <span class="ico">▦</span><span>Log</span>
+        <button data-view="analytics" title="Log">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20V10"/><path d="M10 20V4"/><path d="M16 20v-8"/><path d="M22 20H2"/></svg>
+          <span>Log</span>
         </button>
-        <button data-view="hardware" title="Hardware">
-          <span class="ico">⚡</span><span>Bay</span>
+        <button data-view="hardware" title="Bay">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 2 4.5 13.5h6L10 22l8.5-11.5h-6z"/></svg>
+          <span>Bay</span>
         </button>
         <button data-view="proof" title="Proof">
-          <span class="ico">✓</span><span>Proof</span>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="m8.5 12.5 2.4 2.4 4.6-5.4"/></svg>
+          <span>Proof</span>
         </button>
       </nav>
-      <div class="rail-foot">
-        <span class="dot live"></span>
-        <small>OS 2.0</small>
-      </div>
+      <div class="rail-foot"><small>OS 2.0</small></div>
     </aside>
 
     <div class="stage">
@@ -52,16 +54,18 @@
         </div>
         <div class="top-meta">
           <div class="pill" id="hwPill"><span class="dot"></span> SIMULATED HW</div>
+          <div class="pill dim" id="aiPill"><span class="dot ai"></span> AI: —</div>
           <div class="pill dim" id="clock">--:--:-- IST</div>
         </div>
       </header>
 
+      <!-- ============ PLANT ============ -->
       <section id="view-facility" class="view on">
         <div class="facility-grid">
           <div class="plant">
             <div class="plant-head">
               <h2>Four-bay plant</h2>
-              <p>Rotating disc + flap. Vision proposes, sensors veto, actuator commits.</p>
+              <p class="hint">Rotating disc + flap. Vision proposes, sensors veto, actuator commits.</p>
             </div>
             <div class="disc-wrap" id="discWrap">
               <svg class="disc-svg" viewBox="0 0 420 420" id="discSvg">
@@ -83,6 +87,7 @@
               </svg>
               <div class="flying" id="flyingItem" hidden></div>
             </div>
+            <p class="disc-tel" id="discTelemetry">ANGLE —° · FLAP —° · t=— ms</p>
             <div class="bay-row" id="bayRow"></div>
           </div>
 
@@ -111,35 +116,42 @@
               <pre class="ticket" id="ticket">Awaiting first sort.</pre>
             </div>
             <div class="panel">
-              <h3>Live ledger</h3>
+              <h3>Sort feed</h3>
               <ul class="ledger" id="ledger"></ul>
             </div>
           </aside>
         </div>
       </section>
 
+      <!-- ============ SORT ============ -->
       <section id="view-classify" class="view">
-        <div class="classify-grid">
-          <div class="panel drop-panel">
-            <h3>Drop an item on the tray</h3>
+        <div class="sort-grid">
+          <div class="panel stage-panel">
             <div class="tabs">
               <button class="tab on" data-tab="upload">Upload</button>
-              <button class="tab" data-tab="cam">Webcam</button>
+              <button class="tab" data-tab="cam">Camera</button>
             </div>
+
             <div id="tab-upload" class="tabbody on">
               <label class="drop" id="drop">
                 <input type="file" id="file" accept="image/*" hidden />
                 <strong>Drop a photo</strong>
                 <span>or click to browse — bottle, can, paper, peel</span>
               </label>
-              <div class="preview-row">
-                <img id="preview" alt="" hidden />
-              </div>
+              <p class="hint mt">No GPU required. Gallery items are the labeled calibration set; arbitrary frames go through SigLIP2 → Roboflow → MobileNetV2 → color-texture forest.</p>
             </div>
+
             <div id="tab-cam" class="tabbody">
-              <div class="cam-box">
+              <div class="cam-stage">
                 <video id="cam" autoplay playsinline muted></video>
                 <div class="crosshair"></div>
+                <div class="stability" id="stability" style="--p:0"></div>
+                <div class="cam-chip" id="probeChip" hidden><span class="dot live"></span> LIVE · PROBE 1.6s</div>
+                <div class="cam-overlay" id="camOverlay" hidden>
+                  <span class="overlay-cls" id="overlayClass">—</span>
+                  <span class="overlay-bar"><i id="overlayBar"></i></span>
+                  <span class="overlay-bay" id="overlayBay">—</span>
+                </div>
               </div>
               <div class="row">
                 <button class="btn" id="btnCam">Open camera</button>
@@ -148,12 +160,23 @@
               </div>
               <p class="hint" id="liveHint" hidden></p>
             </div>
-            <p class="hint">No GPU required. Gallery items are the labeled calibration set. Arbitrary frames go through the SigLIP2 waste classifier → Roboflow → MobileNetV2 waste map, then the color-texture forest.</p>
           </div>
 
-          <div class="panel">
+          <div class="panel decision-panel">
+            <h3>Decision</h3>
+            <div class="row" style="margin-top:0; margin-bottom:10px;">
+              <span class="chip ai" id="visionBackend">vision: —</span>
+            </div>
+            <img class="frame-thumb" id="preview" alt="last frame" hidden />
+            <h3 class="mt">Vision probabilities</h3>
+            <div class="probs" id="probBars"><p class="hint">Awaiting first frame…</p></div>
+            <h3 class="mt">Fusion verdict</h3>
+            <div id="fusionCards"><p class="hint">No sort evaluated yet.</p></div>
+          </div>
+
+          <div class="panel inputs-panel">
             <h3>Calibration gallery</h3>
-            <p class="hint">Click any item. It runs the full chain: vision → IR/moisture/metal → fused bay → disc.</p>
+            <p class="hint">Click any item. Full chain: vision → IR/moisture/metal → fused bay → disc.</p>
             <div class="gallery" id="gallery"></div>
             <div class="row">
               <button class="btn primary" id="btnProofLite">Run 10-item proof pass</button>
@@ -162,6 +185,7 @@
         </div>
       </section>
 
+      <!-- ============ LOG ============ -->
       <section id="view-analytics" class="view">
         <div class="stats-row" id="statsRow"></div>
         <div class="charts">
@@ -176,8 +200,8 @@
         </div>
         <div class="panel">
           <div class="row spread">
-            <h3>Detection log</h3>
-            <div class="row">
+            <h3 style="margin:0">Detection log</h3>
+            <div class="row" style="margin-top:0">
               <a class="btn" href="/api/export.csv" download="bingenie_log.csv">Export CSV</a>
               <button class="btn danger" id="btnReset">Reset facility</button>
             </div>
@@ -186,7 +210,7 @@
             <table>
               <thead>
                 <tr>
-                  <th>#</th><th>When</th><th>Src</th><th>Vision</th><th>Sensors</th><th>Bay</th><th>ms</th>
+                  <th>#</th><th>When</th><th>Src</th><th>Vision</th><th>Backend</th><th>Sensors</th><th>Bay</th><th>ms</th>
                 </tr>
               </thead>
               <tbody id="tbody"></tbody>
@@ -195,17 +219,18 @@
         </div>
       </section>
 
+      <!-- ============ BAY ============ -->
       <section id="view-hardware" class="view">
         <div class="hw-grid">
           <div class="panel">
             <h3>Bridge</h3>
             <p class="hint">Simulator is the default so you can demo without a board. The serial verbs are identical to <code>firmware/bin_genie_esp32.ino</code>.</p>
-            <div class="row">
+            <div class="row" style="margin-top:0">
               <input id="port" placeholder="sim  or  /dev/ttyUSB0  or  COM3" />
               <button class="btn primary" id="btnConnect">Connect</button>
               <button class="btn" id="btnPing">PING</button>
             </div>
-            <p class="mono" id="hwState">mode=simulated  port=sim://bin-genie</p>
+            <p class="mono-line" id="hwState">mode=simulated  port=sim://bin-genie</p>
             <h3 class="mt">Sensor overrides — fusion demo</h3>
             <p class="hint">Force a wet tray or a metal hit, then sort a paper sample. Fusion should veto into RS-04.</p>
             <div class="row wrap">
@@ -232,24 +257,22 @@
         </div>
       </section>
 
+      <!-- ============ PROOF ============ -->
       <section id="view-proof" class="view">
         <div class="panel">
           <h3>Proof run</h3>
-          <p>Ten labeled items, one after another. Each row is a real SQLite write plus a simulated (or serial) <code>SORT</code> command. Screen-record this page — it is the viva evidence.</p>
+          <p class="hint">Ten labeled items, one after another. Each row is a real SQLite write plus a simulated (or serial) <code>SORT</code> command. Screen-record this page — it is the viva evidence.</p>
           <div class="row">
             <button class="btn primary" id="btnProof">Start proof run</button>
             <a class="btn" href="/api/proof/report" target="_blank" rel="noopener">Open proof report</a>
-            <a class="btn" href="/static/video/bingenie_simulation.mp4" download>Download simulation video</a>
           </div>
-          <p class="hint">Evaluators asked for simulation — this 60s clip is the plant running with no physical bin. Captions are burned in so it works muted.</p>
-          <video class="simvid" controls playsinline src="/static/video/bingenie_simulation.mp4"></video>
           <ol class="proof-list" id="proofList"></ol>
         </div>
       </section>
     </div>
   </div>
 
-  <div class="toast" id="toast" hidden></div>
+  <div class="toast" id="toast" hidden aria-live="polite"></div>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
   <script src="/static/js/app.js"></script>
 </body>
